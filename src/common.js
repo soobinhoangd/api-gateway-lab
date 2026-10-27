@@ -1,0 +1,10 @@
+const http = require('node:http');
+const crypto = require('node:crypto');
+const secret = process.env.JWT_SECRET || 'local-demo-only-change-this-secret-123456789';
+const users = [{id:1,name:'Nguyễn Văn An',email:'an@example.com'}, {id:2,name:'Trần Thị Bình',email:'binh@example.com'}];
+function json(res,status,data,headers={}) { res.writeHead(status, {'Content-Type':'application/json; charset=utf-8',...headers}); res.end(JSON.stringify(data)); }
+async function body(req) { let data=''; for await (const chunk of req) { data+=chunk; if(Buffer.byteLength(data)>16384) { const e=new Error('Request body too large');e.status=413;throw e; } } try{return JSON.parse(data||'{}');}catch{const e=new Error('Invalid JSON');e.status=400;throw e;} }
+function signToken(id) { const enc=x=>Buffer.from(JSON.stringify(x)).toString('base64url'); const data=enc({alg:'HS256',typ:'JWT'})+'.'+enc({sub:String(id),iss:'gateway-lab',aud:'gateway-lab',iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+3600}); return data+'.'+crypto.createHmac('sha256',secret).update(data).digest('base64url'); }
+function verifyToken(token) { try { const [h,p,s,...extra]=token.split('.'); if(extra.length || !h||!p||!s) return null; const expected=crypto.createHmac('sha256',secret).update(h+'.'+p).digest(); const actual=Buffer.from(s,'base64url'); if(actual.length!==expected.length||!crypto.timingSafeEqual(actual,expected))return null; const header=JSON.parse(Buffer.from(h,'base64url')); const claims=JSON.parse(Buffer.from(p,'base64url')); if(header.alg!=='HS256'||claims.iss!=='gateway-lab'||claims.aud!=='gateway-lab'||!Number.isFinite(claims.exp)||claims.exp<=Date.now()/1000||!users.some(u=>String(u.id)===claims.sub))return null;return claims; } catch{return null;} }
+function serve(handler,port,host='127.0.0.1') { const server=http.createServer(async(req,res)=>{try{await handler(req,res);}catch(e){if(!res.headersSent)json(res,e.status||500,{error:e.status?e.message:'Internal server error'});else res.end();}}); server.listen(port,host,()=>console.log(`Listening on ${host}:${port}`));return server; }
+module.exports={json,body,signToken,verifyToken,serve,users};

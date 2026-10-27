@@ -1,0 +1,10 @@
+const {performance}=require('node:perf_hooks');const fs=require('node:fs/promises');
+const gateway=process.env.GATEWAY_URL||'http://127.0.0.1:8088';const direct=process.env.USER_SERVICE_URL||'http://127.0.0.1:3001';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function request(url,token){const start=performance.now();const r=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{},signal:AbortSignal.timeout(5000)});await r.text();if(!r.ok)throw new Error(`${url}: HTTP ${r.status}`);return performance.now()-start;}
+function stats(samples){const s=[...samples].sort((a,b)=>a-b);return {count:s.length,meanMs:+(s.reduce((a,b)=>a+b,0)/s.length).toFixed(3),p50Ms:+s[Math.ceil(s.length*.5)-1].toFixed(3),p95Ms:+s[Math.ceil(s.length*.95)-1].toFixed(3)};}
+async function main(){const count=Number(process.argv[2]||50);if(!Number.isInteger(count)||count<1||count>10000)throw new Error('Sample count must be 1..10000');const login=await fetch(gateway+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:1,password:process.env.DEMO_PASSWORD||'demo123'})});if(!login.ok)throw new Error('Login failed: '+login.status);const {accessToken}=await login.json();
+ for(let i=0;i<5;i++){await sleep(150);await request(direct+'/users');await request(gateway+'/users',accessToken);}await sleep(1100);
+ const a=[],b=[];for(let i=0;i<count;i++){await sleep(150);if(i%2){b.push(await request(gateway+'/users',accessToken));a.push(await request(direct+'/users'));}else{a.push(await request(direct+'/users'));b.push(await request(gateway+'/users',accessToken));}}
+ const result={timestamp:new Date().toISOString(),direct:stats(a),gateway:stats(b),notes:'Sequential, warmed connections, alternating order, 150 ms pacing; keep other clients idle.'};result.meanOverheadMs=+(result.gateway.meanMs-result.direct.meanMs).toFixed(3);await fs.writeFile('benchmark-results.json',JSON.stringify(result,null,2));console.table({direct:result.direct,gateway:result.gateway});console.log('Mean gateway overhead (ms):',result.meanOverheadMs);}
+main().catch(e=>{console.error(e.message);process.exitCode=1;});

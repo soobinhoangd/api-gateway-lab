@@ -1,0 +1,1 @@
+{"name":"api-gateway-lab","version":"1.0.0","private":true,"description":"User, Order, JWT API Gateway and MinIO lab","scripts":{"start":"node src/start.js","test":"node --test test/integration.test.js","benchmark":"node scripts/benchmark.js"},"engines":{"node":">=22"}}

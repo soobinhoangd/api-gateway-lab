@@ -1,0 +1,21 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const {once}=require('node:events');
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+test('routing, JWT, dashboard, presign, rate limit, upstream failure',async t=>{
+ const user=require('../src/user').start(0);const order=require('../src/order').start(0);await Promise.all([once(user,'listening'),once(order,'listening')]);
+ const gateway=require('../src/gateway').start(0,{userUrl:`http://127.0.0.1:${user.address().port}`,orderUrl:`http://127.0.0.1:${order.address().port}`});await once(gateway,'listening');
+ t.after(()=>{gateway.closeAllConnections();gateway.close();user.closeAllConnections();user.close();order.closeAllConnections();order.close();});
+ const base=`http://127.0.0.1:${gateway.address().port}`;
+ assert.equal((await fetch(base+'/users')).status,401);
+ assert.equal((await fetch(base+'/auth/login',{method:'POST',body:JSON.stringify({userId:1,password:'wrong'})})).status,401);
+ const login=await fetch(base+'/auth/login',{method:'POST',body:JSON.stringify({userId:1,password:'demo123'})});assert.equal(login.status,200);const {accessToken}=await login.json();const headers={Authorization:'Bearer '+accessToken};
+ assert.equal((await fetch(base+'/users',{headers:{Authorization:'Bearer '+accessToken+'x'}})).status,401);
+ const {signToken}=require('../src/common');const crypto=require('node:crypto');const parts=signToken(1).split('.');const claims=JSON.parse(Buffer.from(parts[1],'base64url'));claims.exp=1;parts[1]=Buffer.from(JSON.stringify(claims)).toString('base64url');parts[2]=crypto.createHmac('sha256',process.env.JWT_SECRET||'local-demo-only-change-this-secret-123456789').update(parts[0]+'.'+parts[1]).digest('base64url');assert.equal((await fetch(base+'/users',{headers:{Authorization:'Bearer '+parts.join('.')}})).status,401);
+ const users=await fetch(base+'/users',{headers});assert.equal(users.status,200);assert.equal((await users.json()).length,2);
+ assert.equal((await fetch(base+'/orders?userId=2',{headers}).then(r=>r.json()))[0].id,103);
+ const dashboard=await fetch(base+'/dashboard',{headers}).then(r=>r.json());assert.equal(dashboard.user.id,1);assert.equal(dashboard.orders.length,2);assert.equal(dashboard.summary.totalAmount,1450000);
+ const signed=await fetch(base+'/users/me/avatar-upload-url',{method:'POST',headers,body:JSON.stringify({contentType:'image/png'})}).then(r=>r.json());const url=new URL(signed.uploadUrl);assert.equal(url.searchParams.get('X-Amz-Expires'),'300');assert.match(url.searchParams.get('X-Amz-Signature'),/^[a-f0-9]{64}$/);assert.match(url.pathname,/^\/avatars\/1\/.+\.png$/);
+ await pause(1100);const responses=await Promise.all(Array.from({length:15},()=>fetch(base+'/users',{headers})));assert.equal(responses.filter(r=>r.status===200).length,10);assert.equal(responses.filter(r=>r.status===429).length,5);assert.equal(responses.find(r=>r.status===429).headers.get('retry-after'),'1');
+ await pause(1100);assert.equal((await fetch(base+'/users',{headers})).status,200);assert.equal((await fetch(base+'/users/me/avatar-upload-url',{method:'POST',headers,body:'{bad'})).status,400);
+ assert.equal((await fetch(base+'/users/me/avatar-upload-url',{method:'POST',headers,body:JSON.stringify({contentType:'text/plain'})})).status,400);
+ order.closeAllConnections();await new Promise(resolve=>order.close(resolve));assert.equal((await fetch(base+'/dashboard',{headers})).status,502);
+});

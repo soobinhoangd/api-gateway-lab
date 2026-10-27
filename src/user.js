@@ -1,0 +1,3 @@
+const {serve,json,users}=require('./common');
+function start(port=3001,host=process.env.SERVICE_HOST||'127.0.0.1'){return serve((req,res)=>{const url=new URL(req.url,'http://local');if(req.method==='GET'&&url.pathname==='/health')return json(res,200,{status:'ok',service:'user'});if(req.method==='GET'&&url.pathname==='/users')return json(res,200,users);const match=url.pathname.match(/^\/users\/(\d+)$/);if(req.method==='GET'&&match){const user=users.find(u=>u.id===Number(match[1]));return json(res,user?200:404,user||{error:'User not found'});}json(res,404,{error:'Not found'});},port,host);}
+if(require.main===module)start();module.exports={start};
